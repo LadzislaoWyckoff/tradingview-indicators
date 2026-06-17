@@ -1,0 +1,59 @@
+//@version=5
+indicator("Wyckoffeeslau Comparison MTF Module", shorttitle="Comp MTF Module", overlay=false)
+
+// === Inputs (only 2) ===
+bench = input.string("ES1!", "Benchmark symbol",
+     options=["TOTAL2", "ETHUSDT", "SOLUSDT", "BNBUSDT", "OTHERS", "ES1!", "DXY (inv)"])
+tfInput = input.timeframe("240", "Calculation timeframe")
+
+// === Fixed module params ===
+length = 126
+screenerN = 5
+scaleFactor = 50.0
+zAvgLength = 100
+
+// === Benchmark mapping ===
+symbolBench = switch bench
+    "TOTAL2" => "CRYPTOCAP:TOTAL2"
+    "ETHUSDT" => "BINANCE:ETHUSDT"
+    "SOLUSDT" => "BINANCE:SOLUSDT"
+    "BNBUSDT" => "BINANCE:BNBUSDT"
+    "OTHERS" => "CRYPTOCAP:OTHERS"
+    "ES1!" => "CME_MINI:ES1!"
+    "DXY (inv)" => "TVC:DXY"
+
+// === MTF source series ===
+src_close = request.security(syminfo.tickerid, tfInput, close)
+bench_close = request.security(symbolBench, tfInput, close)
+
+invert = bench == "DXY (inv)"
+spread = src_close / bench_close
+spread := invert ? 1 / (bench_close / src_close) : spread
+
+// === MA and Z-score ===
+ma = ta.ema(spread, length)
+stddev = ta.stdev(spread, length)
+zscore = ((spread - ma) / stddev) * scaleFactor
+zscore_avg = math.round(ta.sma(zscore, zAvgLength), 0)
+
+zscore_avg_n1 = zscore_avg[screenerN]
+zscore_avg_n2 = zscore_avg[screenerN * 2]
+zscore_avg_n3 = zscore_avg[screenerN * 3]
+zscore_avg_n4 = zscore_avg[screenerN * 4]
+
+// === Screener plots (hidden) ===
+plot(zscore_avg, title="score", color=color.new(color.red, 100), display=display.none)
+plot(zscore_avg_n1, title="score_n1", color=color.new(color.white, 100), display=display.none)
+plot(zscore_avg_n2, title="score_n2", color=color.new(color.white, 100), display=display.none)
+plot(zscore_avg_n3, title="score_n3", color=color.new(color.white, 100), display=display.none)
+plot(zscore_avg_n4, title="score_n4", color=color.new(color.white, 100), display=display.none)
+
+// === Visible drawings (commented out) ===
+// plot(spread, title="Spread", color=spread > ma ? color.white : color.red, linewidth=2)
+// plot(ma, title="Average", color=color.blue, linewidth=2)
+// bgColor = zscore_avg > 5 ? color.new(color.green, 85) : zscore_avg < -5 ? color.new(color.red, 85) : na
+// bgcolor(bgColor)
+// var label zLabel = na
+// if bar_index == ta.highest(bar_index, length)
+//     label.delete(zLabel)
+//     zLabel := label.new(x=bar_index, y=spread, text=str.tostring(math.round(zscore_avg)), style=label.style_label_left, textcolor=color.black, color=color.yellow, size=size.small)

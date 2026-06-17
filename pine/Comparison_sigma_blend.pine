@@ -1,0 +1,84 @@
+//@version=6
+indicator('Wyckoffeeslau Comparison VIP', shorttitle = 'Comparison VIP', overlay = false)
+
+// === Inputs ===
+length = input.int(20, 'MA Length')
+useEMA = input.bool(true, 'Use EMA?')
+
+bench = input.string('ES1!', 'Benchmark symbol', options = ['TOTAL2', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'OTHERS', 'ES1!', 'DXY (inv)'])
+
+// === Benchmark Logic ===
+symbolBench = switch bench
+    'TOTAL2' => 'CRYPTOCAP:TOTAL2'
+    'ETHUSDT' => 'BINANCE:ETHUSDT'
+    'SOLUSDT' => 'BINANCE:SOLUSDT'
+    'BNBUSDT' => 'BINANCE:BNBUSDT'
+    'OTHERS' => 'CRYPTOCAP:OTHERS'
+    'ES1!' => 'CME_MINI:ES1!'
+    'DXY (inv)' => 'TVC:DXY'
+
+bench_close = request.security(symbolBench, timeframe.period, close)
+invert = bench == 'DXY (inv)'
+spread = close / bench_close
+spread := invert ? 1 / (bench_close / close) : spread
+
+// === MA, Z-score and Sigma-Distance Blend ===
+ma = useEMA ? ta.ema(spread, length) : ta.sma(spread, length)
+ma2 = ta.ema(spread, 21)
+stddev = ta.stdev(spread, length)
+
+scaleFactor = input.float(50.0, 'Z-score Scale Factor')
+zscore = stddev != 0 ? (spread - ma) / stddev * scaleFactor : 0.0
+
+zAvgLength = input.int(100, 'Z-Score Averaging Length')
+zscore_trend = ta.sma(zscore, zAvgLength)
+
+// Distance between spread and MA in universal units (sigmas)
+distanceWeight = input.float(0.35, 'Distance Weight (0..1)', minval = 0.0, maxval = 1.0)
+distanceSmooth = input.int(5, 'Distance Smoothing', minval = 1)
+distanceScale = input.float(50.0, 'Distance Scale')
+
+distance_sigma = stddev != 0 ? (spread - ma) / stddev : 0.0
+distance_component = ta.sma(distance_sigma * distanceScale, distanceSmooth)
+
+// MA slope as an angle (degrees)
+angleLen = input.int(10, 'MA Angle Length', minval = 1)
+angleSmooth = input.int(3, 'MA Angle Smoothing', minval = 1)
+angleWeight = input.float(0.20, 'Angle Weight (0..1)', minval = 0.0, maxval = 1.0)
+angleScale = input.float(2.0, 'Angle Scale')
+
+ma_delta = ma - ma[angleLen]
+ma_angle_deg = math.atan(ma_delta / angleLen) * 180.0 / math.pi
+angle_component = ta.sma(ma_angle_deg * angleScale, angleSmooth)
+
+baseWeight = math.max(0.0, 1.0 - distanceWeight - angleWeight)
+score_raw = zscore_trend * baseWeight + distance_component * distanceWeight + angle_component * angleWeight
+score = math.round(score_raw, 0)
+
+screenerN = input.int(1, 'Screener Shift N', minval = 1)
+
+score_n1 = score[screenerN]
+score_n2 = score[screenerN * 2]
+score_n3 = score[screenerN * 3]
+score_n4 = score[screenerN * 4]
+
+// === Plot ===
+plot(spread, title = 'Spread', color = spread > ma ? color.white : color.red, linewidth = 2)
+plot(ma, title = 'Average', color = color.blue, linewidth = 2)
+plot(ma2, title = 'Average', color = color.rgb(205, 243, 33), linewidth = 1)
+plot(score, title = 'score', color = color.new(color.red, 100), display = display.none)
+plot(score_n1, title = 'score_n1', color = color.new(color.white, 100), display = display.none)
+plot(score_n2, title = 'score_n2', color = color.new(color.white, 100), display = display.none)
+plot(score_n3, title = 'score_n3', color = color.new(color.white, 100), display = display.none)
+plot(score_n4, title = 'score_n4', color = color.new(color.white, 100), display = display.none)
+
+// === Background coloring by score zones ===
+bgColor = score > 66 ? color.new(color.orange, 85) : score > 15 ? color.new(color.green, 85) : score < -66 ? color.new(color.aqua, 85) : score < -15 ? color.new(color.red, 85) : color.new(color.black, 100)
+bgcolor(bgColor)
+
+// === Show Score Label on Last Bar ===
+var label scoreLabel = na
+if bar_index == ta.highest(bar_index, length)
+    label.delete(scoreLabel)
+    scoreLabel := label.new(x = bar_index, y = spread, text = str.tostring(score), style = label.style_label_left, textcolor = color.black, color = color.yellow, size = size.small)
+    scoreLabel

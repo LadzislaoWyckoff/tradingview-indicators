@@ -1,0 +1,141 @@
+// This work is licensed under a Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0) https://creativecommons.org/licenses/by-nc-sa/4.0/
+//@version=5
+indicator("Volatility Trend (Zeiierman)", overlay = true)
+
+t1 = "Controls the period over which the trend is calculated. Lower values will make the trend more sensitive to price changes, while higher values will make it smoother."
+t2 = "Controls the dynamic responsiveness of the trend. Higher values will make the trend adjust more slowly to price changes."
+t3 = "The first value sets the scaling factor for volatility. A higher value will widen the distance between the trend lines and the price. \n\nThe second value: Sensitivity for volatility adjustment. Values range from 0 to 1; higher values make the bands more sensitive to volatility changes."
+t4 = "Controls the degree of market squeeze taken into account. Higher values increase sensitivity."
+t5 = "If enabled, the algorithm will focus on short-term trends suitable for scalping strategies."
+
+trendControl           = input.int(20, title="Trend Control", minval=1, maxval=500, inline="", group="Trend Settings", tooltip=t1)
+trendDynamicControl    = input.float(100, title="Trend Dynamic", minval = 8, maxval=500, inline="", group="Trend Settings", tooltip=t2)
+volatilityControl      = input.float(10, title="Volatility", minval = 0, inline="vol", group="Volatility Settings")
+volatilitySensitivity  = input.float(0.5, title= "Sensitivity", minval = 0, maxval = 1, step=0.1, inline="vol", group="Volatility Settings", tooltip=t3)
+
+squeezeControl         = input.int(1, title="Squeeze Control", minval=1, maxval=200, group="Advanced Settings", tooltip=t4)
+shorttermtrend         = input.bool(false, title="Enable Scalping Trend (For BTC)", group="Advanced Settings", tooltip=t5)
+
+color_up    = input.color(color.navy, title="Line   ", inline="Line", group="Style")
+color_dn    = input.color(color.maroon, title="", inline="Line", group="Style")
+color_upper = input.color(color.new(#862458, 10), title="Cloud ", inline="Cloud", group="Style")
+color_lower = input.color(color.new(#493893, 10),title="", inline="Cloud", group="Style")
+
+showNarrowing3 = input.bool(true, title="Show 3 Narrowing Bubbles", group="Pattern")
+showNarrowing4 = input.bool(true, title="Show 4 Narrowing Bubbles", group="Pattern")
+patternColor3  = input.color(color.new(color.yellow, 0), title="3 Bubbles Color", group="Pattern")
+patternColor4  = input.color(color.new(color.orange, 0), title="4 Bubbles Color", group="Pattern")
+
+showAnomalousBubble = input.bool(true, title="Show Anomalous Bubbles", group="Anomaly")
+anomalyThresholdPct = input.float(25.0, title="Anomaly Threshold %", minval=5.0, step=5.0, group="Anomaly")
+anomalyLookback     = input.int(10, title="Average Over N Bubbles", minval=3, maxval=50, group="Anomaly")
+anomalyColor        = input.color(color.new(color.red, 0), title="Anomaly Color", group="Anomaly")
+
+
+// Var
+var float trend        = 0.0
+var int trendDirection = 0
+
+// Function to calculate standard deviation
+stddev_function(src_, p) =>
+    if bar_index < p - 1
+        0.0
+    else
+        sum = 0.0
+        for i = 0 to p - 1
+            sum := sum + src_[i]
+        mean = sum / p
+        sum_diff_sq = 0.0
+        for i = 0 to p - 1
+            sum_diff_sq := sum_diff_sq + math.pow(src_[i] - mean, 2)
+        stdev = shorttermtrend?math.sqrt(sum_diff_sq / close * p * squeezeControl) : math.sqrt(sum_diff_sq / p * squeezeControl)
+
+// Function to determine the trend direction
+trendDirectionFunction(dir) =>
+    dir - dir[1] > 0 ? 1 : (dir - dir[1] < 0 ? -1 : 0)
+
+// Call Trend Direction
+trendDirection := trendDirectionFunction(trend)
+
+// Call Scaled StdDev
+scaledStdDev    = stddev_function(trend, trendControl) * volatilityControl
+priceTrend      = close - trend > 0 ? close - trend : trend - close
+
+// Calculate the Trend
+trendAdjustment = priceTrend>scaledStdDev?math.avg(close,trend):trendDirection * (scaledStdDev * (1/volatilityControl) * (1/trendDynamicControl)) + trend
+trend          := trendAdjustment
+
+// Get Upper and Lower Bands
+upper = trend + (volatilitySensitivity * scaledStdDev)
+lower = trend - (volatilitySensitivity * scaledStdDev)
+
+// Narrowing bubble patterns
+bandHeight = upper - lower
+
+//Plot
+trueTrend = trendDirection == trendDirection[1]
+color_    = trendDirection == 1 ? color_up : color_dn
+
+// Bubble boundary = local minimum of bandHeight (was shrinking, now expanding)
+// OR start of a new trueTrend segment (gap between fills)
+wasDecreasing = bandHeight[1] < bandHeight[2]
+nowIncreasing = bandHeight > bandHeight[1]
+newBubbleCycle = wasDecreasing and nowIncreasing and trueTrend
+trendRestart   = trueTrend and not trueTrend[1]
+bubbleBoundary = newBubbleCycle or trendRestart
+
+var float currentPeakHeight = na   // peak bandHeight of current bubble
+var float lastPeakHeight    = na   // peak of previously completed bubble
+var int   narrowingStreak   = 0
+
+// Anomaly detection
+var float[] bubbleHeights = array.new_float(0)
+var float avgBubbleHeight = na
+anomalySignal = false
+
+// At each bubble boundary the previous bubble is "complete"
+if bubbleBoundary
+    if not na(currentPeakHeight) and not na(lastPeakHeight)
+        if currentPeakHeight < lastPeakHeight
+            narrowingStreak += 1
+        else
+            narrowingStreak := 0
+    // anomaly check
+    if not na(currentPeakHeight)
+        array.push(bubbleHeights, currentPeakHeight)
+        if array.size(bubbleHeights) > anomalyLookback
+            array.shift(bubbleHeights)
+        if array.size(bubbleHeights) >= 2
+            // average of all except last (the one we're checking)
+            sumPrev = 0.0
+            for i = 0 to array.size(bubbleHeights) - 2
+                sumPrev += array.get(bubbleHeights, i)
+            avgPrev = sumPrev / (array.size(bubbleHeights) - 1)
+            avgBubbleHeight := avgPrev
+            threshold = avgPrev * (1.0 + anomalyThresholdPct / 100.0)
+            if currentPeakHeight > threshold
+                anomalySignal := true
+    if not na(currentPeakHeight)
+        lastPeakHeight := currentPeakHeight
+    currentPeakHeight := bandHeight
+else if trueTrend
+    currentPeakHeight := na(currentPeakHeight) ? bandHeight : math.max(currentPeakHeight, bandHeight)
+
+// Also reset streak when trend disappears (gap)
+if not trueTrend and not trueTrend[1]
+    narrowingStreak := 0
+
+pattern3Signal = bubbleBoundary and narrowingStreak >= 2
+pattern4Signal = bubbleBoundary and narrowingStreak >= 3
+patternY       = upper + (scaledStdDev * 0.25)
+anomalyY       = upper + (scaledStdDev * 0.35)
+
+trend_ = plot(trueTrend?trend:na, title="Trend Line", color=color_)
+upper_ = plot(trueTrend?upper:na, title="Upper Circle Line", color = color.new(color.black,100))
+lower_ = plot(trueTrend?lower:na, title="Lower Circle Line", color = color.new(color.black,100))
+fill(upper_, trend_, top_color = color_upper, bottom_color =color.new(na,100), top_value = upper, bottom_value = trend, title="Bg Upper Circle")
+fill(trend_, lower_, top_color = color.new(na,100), bottom_color = color_lower, top_value = trend, bottom_value = lower, title="Bg Lower Circle")
+
+plotshape(showNarrowing3 and pattern3Signal ? patternY : na, title="3 Narrowing Bubbles", style=shape.circle, location=location.absolute, size=size.tiny, color=patternColor3)
+plotshape(showNarrowing4 and pattern4Signal ? patternY : na, title="4 Narrowing Bubbles", style=shape.diamond, location=location.absolute, size=size.tiny, color=patternColor4)
+plotshape(showAnomalousBubble and anomalySignal ? anomalyY : na, title="Anomalous Bubble", style=shape.triangleup, location=location.absolute, size=size.small, color=anomalyColor)

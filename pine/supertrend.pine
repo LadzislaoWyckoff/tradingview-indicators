@@ -1,0 +1,95 @@
+//@version=6
+indicator('Supertrend (EMA-based) — original fill', overlay = true, format = format.price, precision = 2, timeframe = '')
+
+Periods     = input(title = 'ATR Period', defval = 10)
+src         = input(hl2, title = 'Source')
+Multiplier  = input.float(title = 'ATR Multiplier', step = 0.1, defval = 3.0)
+changeATR   = input(title = 'Change ATR Calculation Method ?', defval = true)
+showsignals = input(title = 'Show Buy/Sell Signals ?', defval = true)
+highlighting= input(title = 'Highlighter On/Off ?', defval = true)
+
+emalength = input.int(9, "EMA Length")
+ema = ta.ema(close, emalength)
+
+// ATR
+atr2 = ta.sma(ta.tr, Periods)
+atr  = changeATR ? ta.atr(Periods) : atr2
+
+// Base lines
+up = src - Multiplier * atr
+up1 = nz(up[1], up)
+up := ema[1] > up1 ? math.max(up, up1) : up
+
+dn = src + Multiplier * atr
+dn1 = nz(dn[1], dn)
+dn := ema[1] < dn1 ? math.min(dn, dn1) : dn
+
+// Trend state
+trend = 1
+trend := nz(trend[1], trend)
+trend := trend == -1 and ema > dn1 ? 1 :
+         trend ==  1 and ema < up1 ? -1 : trend
+
+// Plots
+upPlot = plot(up, title = 'Up Trend', style = plot.style_linebr, linewidth = 2, color = color.new(color.green, 0))
+dnPlot = plot(dn, title = 'Down Trend', style = plot.style_linebr, linewidth = 2, color = color.new(color.red, 0))
+
+// Signals
+buySignal  = trend == 1 and trend[1] == -1
+sellSignal = trend == -1 and trend[1] == 1
+
+plotshape(buySignal ? up : na, title = 'UpTrend Begins', location = location.absolute, style = shape.circle, size = size.tiny, color = color.new(color.green, 0))
+plotshape(buySignal and showsignals ? up : na, title = 'Buy', text = 'Buy', location = location.absolute, style = shape.labelup, size = size.tiny, color = color.new(color.green, 0), textcolor = color.new(color.white, 0))
+
+plotshape(sellSignal ? dn : na, title = 'DownTrend Begins', location = location.absolute, style = shape.circle, size = size.tiny, color = color.new(color.red, 0))
+plotshape(sellSignal and showsignals ? dn : na, title = 'Sell', text = 'Sell', location = location.absolute, style = shape.labeldown, size = size.tiny, color = color.new(color.red, 0), textcolor = color.new(color.white, 0))
+
+// ===== Highlighter (читабельный, без белой заливки) =====
+mPlot = plot(ohlc4, title='', display=display.none)
+
+longFillColor  = highlighting and trend == 1  ? color.new(color.green, 85) : na
+shortFillColor = highlighting and trend == -1 ? color.new(color.red,   85) : na
+
+fill(mPlot, upPlot, title='UpTrend Highligter',   color=longFillColor)
+fill(mPlot, dnPlot, title='DownTrend Highligter', color=shortFillColor)
+
+// Alerts
+alertcondition(buySignal, title = 'SuperTrend Buy', message = 'SuperTrend Buy!')
+alertcondition(sellSignal, title = 'SuperTrend Sell', message = 'SuperTrend Sell!')
+changeCond = trend != trend[1]
+alertcondition(changeCond, title = 'SuperTrend Direction Change', message = 'SuperTrend has changed direction!')
+
+// =====================================================
+// === Supertrend Step Activity: Range / Trend Detector =
+// =====================================================
+stLookback    = input.int(20, "Lookback (bars)", minval = 5, group = "ST Range")
+stThresh      = input.float(1.0, "Trend Threshold", minval = 0.0, step = 0.1, group = "ST Range")
+stSmoothLen   = input.int(5, "Smoothing Length", minval = 1, group = "ST Range")
+stFlatBars    = input.int(10, "Flat → Range (bars without step)", minval = 2, group = "ST Range")
+
+// Step size on each ST line, normalized to ATR (0 when flat)
+// Only count steps while the line is active; skip the flip bar itself
+justFlipped = trend != trend[1]
+stepUp = trend == 1 and not justFlipped and up != up[1] and atr > 0 ? math.abs(up - up[1]) / atr : 0.0
+stepDn = trend == -1 and not justFlipped and dn != dn[1] and atr > 0 ? math.abs(dn - dn[1]) / atr : 0.0
+activeStep = trend == 1 ? stepUp : stepDn
+
+// Trend score = total normalized step movement over lookback
+// Captures both frequency (how often) and magnitude (how big)
+trendScore   = math.sum(activeStep, stLookback)
+trendScoreMA = ta.sma(trendScore, stSmoothLen)
+
+// Flat detection: how many bars since the active ST line last stepped
+hadStep    = activeStep > 0
+barsSinceStep = ta.barssince(hadStep)
+isFlat     = barsSinceStep >= stFlatBars
+
+// Classification: range if score too low OR line hasn't moved in N bars
+stIsTrend = na(trendScoreMA) ? true : trendScoreMA > stThresh and not isFlat
+stIsRange = not stIsTrend
+
+// Background: green = bull trend, red = bear trend, gray = range
+rangeBg = color.new(color.gray, 85)
+bullBg  = color.new(color.green, 90)
+bearBg  = color.new(color.red, 90)
+bgcolor(stIsRange ? rangeBg : trend == 1 ? bullBg : bearBg, force_overlay = true)

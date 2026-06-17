@@ -1,0 +1,44 @@
+//@version=5
+indicator("Wyckoffeeslau Comparison", shorttitle="Comparative", overlay=false)
+
+// === Inputs ===
+length = input.int(20, "MA Length")
+useEMA = input.bool(true, "Use EMA?")
+
+bench = input.string("ES1!", "Benchmark symbol",
+     options=["TOTAL2", "ETHUSDT", "SOLUSDT", "BNBUSDT", "OTHERS", "ES1!", "DXY (inv)"])
+
+// === Benchmark Logic ===
+symbolBench = switch bench
+    "TOTAL2" => "CRYPTOCAP:TOTAL2"
+    "ETHUSDT" => "BINANCE:ETHUSDT"
+    "SOLUSDT" => "BINANCE:SOLUSDT"
+    "BNBUSDT" => "BINANCE:BNBUSDT"
+    "OTHERS" => "CRYPTOCAP:OTHERS"
+    "ES1!" => "CME_MINI:ES1!"
+    "DXY (inv)" => "TVC:DXY"
+
+bench_close = request.security(symbolBench, timeframe.period, close)
+invert = bench == "DXY (inv)"
+spread = close / bench_close
+spread := invert ? 1 / (bench_close / close) : spread
+
+// === MA and Z-score ===
+ma = useEMA ? ta.ema(spread, length) : ta.sma(spread, length)
+stddev = ta.stdev(spread, length)
+scaleFactor = input.float(50.0, "Z-score Scale Factor")
+zscore = ((spread - ma) / stddev) * scaleFactor
+zAvgLength = input.int(100, "Z-Score Averaging Length")
+zscore_avg = math.round(ta.sma(zscore, zAvgLength),0)
+
+// === Plot ===
+plot(spread, title="Spread", color=spread > ma ? color.white : color.red, linewidth=2)
+plot(ma, title="Average", color=color.blue, linewidth=2)
+plot(zscore_avg, title = "score",color=color.new(color.red,100), display=display.none)
+
+
+// === Show Z-Score Label on Last Bar ===
+var label zLabel = na
+if bar_index == ta.highest(bar_index, length)
+    label.delete(zLabel)
+    zLabel := label.new(x=bar_index, y=spread, text=str.tostring(math.round(zscore_avg)), style=label.style_label_left, textcolor=color.black, color=color.yellow, size=size.small)

@@ -1,0 +1,75 @@
+//@version=6
+indicator("Supertrend Step Detector", overlay = false)
+
+// === Inputs: Supertrend ===
+stPeriod    = input.int(10, "Supertrend ATR Period", minval = 1)
+stMult      = input.float(3.0, "Supertrend Multiplier", step = 0.1)
+useEMA      = input.bool(true, "Use EMA instead of Close")
+emaLen      = input.int(9, "EMA Length", minval = 1)
+
+// === Inputs: Detection ===
+lookback    = input.int(20, "Compare N bars ago", minval = 1)
+trendThresh = input.float(1.0, "Trend Threshold (ATR units)", minval = 0.0, step = 0.1)
+maLen       = input.int(10, "Signal MA Length", minval = 1)
+
+// === EMA / Close ===
+ema = ta.ema(close, emaLen)
+src = useEMA ? ema : close
+
+// === ATR ===
+atrVal = ta.atr(stPeriod)
+
+// === Supertrend ===
+upBand = hl2 - stMult * atrVal
+upBand1 = nz(upBand[1], upBand)
+upBand := src[1] > upBand1 ? math.max(upBand, upBand1) : upBand
+
+dnBand = hl2 + stMult * atrVal
+dnBand1 = nz(dnBand[1], dnBand)
+dnBand := src[1] < dnBand1 ? math.min(dnBand, dnBand1) : dnBand
+
+trend = 1
+trend := nz(trend[1], trend)
+trend := trend == -1 and src > dnBand1 ?  1 :
+         trend ==  1 and src < upBand1 ? -1 : trend
+
+// Active ST line
+stLine = trend == 1 ? upBand : dnBand
+
+// === Distance: how far ST line moved over N bars, normalized to ATR ===
+// Bull trend + line rising → positive. Bear trend + line falling → negative. Range → near zero.
+stDelta   = not na(stLine[lookback]) and atrVal > 0 ? (stLine - stLine[lookback]) / atrVal : na
+stDeltaMA = ta.sma(stDelta, maLen)
+
+// === State ===
+isBullTrend = stDeltaMA >  trendThresh
+isBearTrend = stDeltaMA < -trendThresh
+isRange     = not isBullTrend and not isBearTrend
+
+// === Colors ===
+barColor = stDelta >= 0 ? color.new(color.green, 30) : color.new(color.red, 30)
+maColor  = isRange ? color.white : isBullTrend ? color.new(color.green, 0) : color.new(color.red, 0)
+
+// === Plots ===
+plot(stDelta,   "ST Delta",    color = barColor, style = plot.style_columns, linewidth = 2)
+plot(stDeltaMA, "Delta MA",    color = maColor,  linewidth = 2)
+hline(0.0, "Zero", color = color.gray, linestyle = hline.style_dashed)
+plot(trendThresh,  "Bull Thresh", color = color.new(color.green, 70), linewidth = 1, style = plot.style_circles)
+plot(-trendThresh, "Bear Thresh", color = color.new(color.red, 70),   linewidth = 1, style = plot.style_circles)
+
+// === Background ===
+bgcolor(isRange ? color.new(color.white, 93) : na)
+
+// === Info table ===
+var table tbl = table.new(position.top_right, 2, 4, bgcolor = color.new(color.black, 80))
+if barstate.islast
+    table.cell(tbl, 0, 0, "Trend Dir",  text_color = color.white,  text_size = size.small)
+    table.cell(tbl, 1, 0, trend == 1 ? "BULL" : "BEAR", text_color = trend == 1 ? color.green : color.red, text_size = size.small)
+    table.cell(tbl, 0, 1, "ST Delta",   text_color = color.yellow, text_size = size.small)
+    table.cell(tbl, 1, 1, str.tostring(stDelta, "#.###"), text_color = color.yellow, text_size = size.small)
+    table.cell(tbl, 0, 2, "Delta MA",   text_color = color.orange, text_size = size.small)
+    table.cell(tbl, 1, 2, str.tostring(stDeltaMA, "#.###"), text_color = color.orange, text_size = size.small)
+    stateStr = isRange ? "RANGE" : isBullTrend ? "TREND BULL" : "TREND BEAR"
+    stateClr = isRange ? color.white : isBullTrend ? color.green : color.red
+    table.cell(tbl, 0, 3, "State",      text_color = color.white,  text_size = size.small)
+    table.cell(tbl, 1, 3, stateStr, text_color = stateClr, text_size = size.small)

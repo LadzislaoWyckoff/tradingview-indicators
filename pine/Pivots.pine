@@ -1,0 +1,51 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//@version=6
+indicator("PnF Swing Pivots", shorttitle="PnF Swings", overlay = true, max_labels_count = 500)
+
+// --- Inputs ---
+pivotLeft  = input.int(4, "Левое плечо (кол-во колонок)", minval = 1, tooltip = "Количество колонок слева, которые должны быть ниже (для хая) или выше (для лоу).")
+pivotRight = input.int(4, "Правое плечо (подтверждение)", minval = 1, tooltip = "Количество колонок справа для подтверждения пивота. Чем больше, тем меньше ложных сигналов.")
+showLength = input.bool(true, "Показывать длину движения", tooltip = "Показывает расстояние в тиках от предыдущего противоположного пивота.")
+
+// --- Logic ---
+// На PnF графике каждый бар — это отдельная колонка. 
+ph = ta.pivothigh(high, pivotLeft, pivotRight)
+pl = ta.pivotlow(low, pivotLeft, pivotRight)
+
+// Переменные для расчета длины (расстояние от прошлого пивота)
+var float lastPhPrice = na
+var float lastPlPrice = na
+
+// --- Visuals ---
+// Используем стиль label.style_triangledown/up для эффекта значка-пирамидки
+if not na(ph)
+    float moveLength = na(lastPlPrice) ? 0 : math.abs(ph - lastPlPrice)
+    int moveTicks = math.round(moveLength / syminfo.mintick)
+    
+    label.new(bar_index[pivotRight], ph, 
+         text      = showLength ? str.tostring(moveTicks) : "", 
+         style     = label.style_triangledown, 
+         color     = #f23645, 
+         textcolor = color.white, 
+         size      = size.small,
+         yloc      = yloc.abovebar)
+    
+    lastPhPrice := ph
+
+if not na(pl)
+    float moveLength = na(lastPhPrice) ? 0 : math.abs(lastPhPrice - pl)
+    int moveTicks = math.round(moveLength / syminfo.mintick)
+    
+    label.new(bar_index[pivotRight], pl, 
+         text      = showLength ? str.tostring(moveTicks) : "", 
+         style     = label.style_triangleup, 
+         color     = #089981, 
+         textcolor = color.white, 
+         size      = size.small,
+         yloc      = yloc.belowbar)
+    
+    lastPlPrice := pl
+
+// Alerts
+alertcondition(not na(ph), "Pivot High", "PnF Pivot High Detected")
+alertcondition(not na(pl), "Pivot Low", "PnF Pivot Low Detected")

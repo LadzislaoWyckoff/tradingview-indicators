@@ -1,0 +1,161 @@
+//@version=6
+indicator(title="ROC WMA MTF [Smart Divergence]", shorttitle="ROCWMA MTF", overlay=false, max_lines_count=500, max_labels_count=500)
+
+//====================
+// INPUTS
+//====================
+tf_mtf = input.timeframe("", "MTF Timeframe")
+
+rocLen     = input.int(55, "ROC Length")
+maLen      = input.int(7,  "MA Length")
+sigLen     = input.int(9,  "Signal Length")
+src        = input.source(hlcc4, "Source")
+trendlength = input.int(50, "Trend Sensitivity")
+
+// Divergence Settings
+gp_div = "Divergence Settings"
+pivotLeft      = input.int(5, "Pivot Left Strength", group=gp_div)
+pivotRight     = input.int(5, "Pivot Right Strength (Delay)", group=gp_div)
+resetThreshold = input.float(1.5, "EMA Reset Threshold", step=0.1, group=gp_div)
+showPotential  = input.bool(true, "Show Potential (Small Dots)", group=gp_div)
+showPriceLines = input.bool(true, "Show Lines on Price Chart", group=gp_div)
+atrBodyFilter  = input.float(0.4, "Body vs ATR Filter (0.4 = 40%)", step=0.05, group=gp_div)
+
+//====================
+// DESIGN PALETTE (Wyckoffeslau)
+//====================
+c_emerald  = #10b981   // oscillator positive
+c_ruby     = #e11d48   // oscillator negative
+c_bull     = #34d399   // bull divergence / trend up
+c_bear     = #fb7185   // bear divergence / trend down
+c_amber    = #fbbf24   // signal line
+c_ink_bull = #04241a   // dark ink on bull badge
+c_ink_bear = #3a0810   // dark ink on bear badge
+
+//====================
+// CALCULATIONS
+//====================
+tema(source, length) =>
+    ema1 = ta.ema(source, length)
+    ema2 = ta.ema(ema1, length)
+    ema3 = ta.ema(ema2, length)
+    3 * (ema1 - ema2) + ema3
+
+zscore(source, length) =>
+    mean  = ta.sma(source, length)
+    stdev = ta.stdev(source, length)
+    (source - mean) / math.max(stdev, 1e-10)
+
+rocwma_bundle(_src) =>
+    roc            = ta.roc(_src, rocLen)
+    low_roc        = ta.lowest(roc, rocLen)
+    high_roc       = ta.highest(roc, rocLen)
+    normalized_roc = (roc - low_roc) / math.max(high_roc - low_roc, 1e-10)
+    base_ma        = tema(_src, maLen)
+    weighted_diff  = normalized_roc * (_src - base_ma)
+    rwma           = base_ma + weighted_diff
+    osc            = zscore(rwma, rocLen)
+    sig            = ta.ema(osc, sigLen)
+    tma            = ta.ema(osc, trendlength)
+    [osc, sig, tma]
+
+use_tf = tf_mtf == "" ? timeframe.period : tf_mtf
+[oscillator, signal, trendma] = request.security(syminfo.tickerid, use_tf, rocwma_bundle(src))
+trendcolor = trendma > 0 ? c_bull : c_bear
+
+//====================
+// DIVERGENCE MEMORY & RESET
+//====================
+ph_osc = ta.pivothigh(oscillator, pivotLeft, pivotRight)
+pl_osc = ta.pivotlow(oscillator, pivotLeft, pivotRight)
+
+var float lastPH_osc   = na
+var float lastPH_price = na
+var int   lastPH_bar   = na
+
+var float lastPL_osc   = na
+var float lastPL_price = na
+var int   lastPL_bar   = na
+
+// Resets
+if not na(lastPH_price) and high > lastPH_price and oscillator > lastPH_osc
+    lastPH_price := na, lastPH_osc := na, lastPH_bar := na
+if not na(lastPL_price) and low < lastPL_price and oscillator < lastPL_osc
+    lastPL_price := na, lastPL_osc := na, lastPL_bar := na
+
+if signal < -resetThreshold
+    lastPH_price := na, lastPH_osc := na, lastPH_bar := na
+if signal > resetThreshold
+    lastPL_price := na, lastPL_osc := na, lastPL_bar := na
+
+// Capture Pivots
+bool confirmedBear = false
+bool confirmedBull = false
+
+if not na(ph_osc)
+    float curOsc   = oscillator[pivotRight]
+    float curPrice = high[pivotRight]
+    int   curBar   = bar_index[pivotRight]
+    if not na(lastPH_price) and curPrice > lastPH_price and curOsc < lastPH_osc
+        confirmedBear := true
+        // Draw in Sub-pane
+        line.new(lastPH_bar, lastPH_osc, curBar, curOsc, color=c_bear, width=2)
+        // Draw on Price Chart
+        if showPriceLines
+            line.new(lastPH_bar, lastPH_price, curBar, curPrice, color=color.new(c_bear, 30), width=2, force_overlay=true)
+    
+    lastPH_osc := curOsc, lastPH_price := curPrice, lastPH_bar := curBar
+
+if not na(pl_osc)
+    float curOsc   = oscillator[pivotRight]
+    float curPrice = low[pivotRight]
+    int   curBar   = bar_index[pivotRight]
+    if not na(lastPL_price) and curPrice < lastPL_price and curOsc > lastPL_osc
+        confirmedBull := true
+        // Draw in Sub-pane
+        line.new(lastPL_bar, lastPL_osc, curBar, curOsc, color=c_bull, width=2)
+        // Draw on Price Chart
+        if showPriceLines
+            line.new(lastPL_bar, lastPL_price, curBar, curPrice, color=color.new(c_bull, 30), width=2, force_overlay=true)
+            
+    lastPL_osc := curOsc, lastPL_price := curPrice, lastPL_bar := curBar
+
+// Potential & Body Filter logic
+potBear = showPotential and not na(lastPH_price) and high > lastPH_price and oscillator < lastPH_osc and oscillator > 0
+potBull = showPotential and not na(lastPL_price) and low < lastPL_price and oscillator > lastPL_osc and oscillator < 0
+
+// Body vs ATR check
+atrVal = ta.atr(14)
+bodySize = math.abs(close - open)
+isSmallBody = bodySize < (atrVal * atrBodyFilter)
+
+// Exhaustion Signals (Corrected Logic: Green for Bear Div Potential, Red for Bull Div Potential)
+exhaustionBear = potBear and close > open and isSmallBody
+exhaustionBull = potBull and close < open and isSmallBody
+
+//====================
+// VISUALS
+//====================
+barcolor(trendcolor)
+
+// Price Overlay Elements
+plotshape(confirmedBear, "Confirmed DIV Bear", shape.labeldown, location.abovebar, c_bear, text="DIV", textcolor=c_ink_bear, size=size.tiny, force_overlay=true)
+plotshape(confirmedBull, "Confirmed DIV Bull", shape.labelup, location.belowbar, c_bull, text="DIV", textcolor=c_ink_bull, size=size.tiny, force_overlay=true)
+
+plotshape(exhaustionBear, "Exhaustion Bear", shape.triangledown, location.abovebar, c_bear, size=size.tiny, force_overlay=true)
+plotshape(exhaustionBull, "Exhaustion Bull", shape.triangleup, location.belowbar, c_bull, size=size.tiny, force_overlay=true)
+
+// Oscillator Pane
+osc_col = oscillator >= 0 ? c_emerald : c_ruby
+plot(oscillator, "Oscillator", color=osc_col, style=plot.style_histogram, linewidth=2)
+plot(signal, "Signal (EMA 9)", color=c_amber, linewidth=1)
+plot(trendma, "Trend MA", color=trendcolor, linewidth=2)
+
+plotshape(not na(ph_osc), "PH", shape.circle, location.top, color.new(c_bear, 20), size=size.small, offset=-pivotRight)
+plotshape(not na(pl_osc), "PL", shape.circle, location.bottom, color.new(c_bull, 20), size=size.small, offset=-pivotRight)
+plotshape(potBear, "Pot Bear", shape.circle, location.top, color.new(c_bear, 60), size=size.tiny)
+plotshape(potBull, "Pot Bull", shape.circle, location.bottom, color.new(c_bull, 60), size=size.tiny)
+
+hline(2, "Upper", color=color.new(c_emerald, 50), linestyle=hline.style_dashed)
+hline(-2, "Lower", color=color.new(c_ruby, 50), linestyle=hline.style_dashed)
+hline(0, "Zero", color=color.new(chart.fg_color, 70))
