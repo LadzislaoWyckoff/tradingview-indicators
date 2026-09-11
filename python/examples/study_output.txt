@@ -1,0 +1,106 @@
+6,999 returns, 1998-01-05 -> 2024-10-31
+sample annualized volatility: 16.34%
+
+==============================================================================
+1. model selection (in-sample, ranked by BIC)
+==============================================================================
+  fitted garch-normal     BIC=    18,559.1  (2.5s)
+  fitted garch-t          BIC=    18,337.7  (7.3s)
+  fitted garch-skewt      BIC=    18,309.5  (8.9s)
+  fitted gjr-normal       BIC=    18,466.1  (5.5s)
+  fitted gjr-t            BIC=    18,277.8  (11.4s)
+  fitted gjr-skewt        BIC=    18,239.1  (13.2s)
+  fitted egarch-normal    BIC=    18,534.6  (10.7s)
+  fitted egarch-t         BIC=    18,328.3  (23.4s)
+  fitted egarch-skewt     BIC=    18,290.0  (36.5s)
+
+        model      loglik         BIC  persistence  half-life  long-run vol    secs
+    gjr-skewt -9,088.5397 18,239.0541       0.9606    17.2591        0.1418 13.2125
+        gjr-t -9,112.3404 18,277.8020       0.9634    18.5642        0.1437 11.3869
+ egarch-skewt -9,114.0238 18,290.0223       0.9674    20.9455        0.1429 36.4670
+  garch-skewt -9,128.1973 18,309.5158       0.9684    21.5523        0.1526  8.8752
+     egarch-t -9,137.6113 18,328.3437       0.9693    22.2452        0.1392 23.4368
+      garch-t -9,146.7289 18,337.7255       0.9696    22.4816        0.1542  7.3372
+   gjr-normal -9,210.8954 18,466.0583       0.9643    19.0850        0.1483  5.4604
+egarch-normal -9,245.1558 18,534.5792       0.9691    22.0828        0.1557 10.7034
+ garch-normal -9,261.8664 18,559.1468       0.9721    24.4681        0.1581  2.4842
+
+best in-sample: gjr-skewt
+
+==============================================================================
+2. specification tests for gjr-skewt
+==============================================================================
+GJR-GARCH(1, 1)  mean=constant  dist=skewt
+observations: 6999    log-likelihood: -9,088.540
+AIC: 18,191.079    BIC: 18,239.054
+
+parameter         estimate     std.err         t         p
+----------------------------------------------------------
+mu                0.030505    0.009987     3.054    0.0023
+omega             0.031431    0.004336     7.248    0.0000
+alpha[1]          0.016807    0.007728     2.175    0.0296
+gamma[1]          0.111527    0.013329     8.367    0.0000
+beta[1]           0.890357    0.010502    84.776    0.0000
+nu                9.166302    0.929356     9.863    0.0000
+lambda           -0.119270    0.017379    -6.863    0.0000
+----------------------------------------------------------
+persistence: 0.960634    half-life: 17.3 days
+long-run annualized vol: 14.18%
+
+  Ljung-Box(20) on z                 stat=   13.9064  df=   20  p= 0.8352  ok
+  Ljung-Box(20) on z^2               stat=   23.0386  df=   20  p= 0.2869  ok
+  ARCH-LM(12)                        stat=    9.9135  df=   12  p= 0.6235  ok
+  Jarque-Bera                        stat=  858.4290  df=    2  p= 0.0000  REJECT at 5%
+  Engle-Ng sign bias (joint)         stat=    2.3534  df=    3  p= 0.5024  ok
+
+==============================================================================
+3. walk-forward backtest (horizon=1d, proxy=garman_klass)
+==============================================================================
+Walk-forward backtest: gjr(1,1)-skewt  horizon=1d
+  4999 out-of-sample forecasts, train=2000, refit every 63 days (80 refits, 0 failed)
+  realized-variance proxy: garman_klass
+
+model                        QLIKE           MSE    MAE(vol)    MZ R2  MZ beta
+------------------------------------------------------------------------------
+gjr                       0.278991     1.028e-08    0.002772    0.676    0.584
+ewma(0.94)                0.286780     1.326e-08    0.002892    0.601    0.527
+rolling_std(60)           0.336243     1.713e-08    0.003218    0.370    0.449
+unconditional             0.548773     1.453e-08    0.004239    0.003    0.742
+------------------------------------------------------------------------------
+lower QLIKE / MSE is better; MZ beta of 1.0 means unbiased
+
+Diebold-Mariano vs the GARCH model (QLIKE loss):
+  vs ewma(0.94)         DM= -1.475  p=0.1403   GARCH better (not significant)
+  vs rolling_std(60)    DM= -6.627  p=0.0000   GARCH better (significant)
+  vs unconditional      DM=-11.248  p=0.0000   GARCH better (significant)
+
+(468s)
+
+==============================================================================
+4. value-at-risk backtest
+==============================================================================
+VaR backtest at alpha = 1.0%  (4999 out-of-sample days)
+  breaches: 52 observed vs 50.0 expected   (rate 1.04%)
+  Kupiec POF          stat=  0.0806  p=0.7765   ok
+  Independence        stat=  0.3189  p=0.5723   ok
+  Conditional cover.  stat=  0.3995  p=0.8189   ok
+  ES on breach days: realized -3.0702% vs predicted -3.0875% (ratio 0.99; >1 means ES is too optimistic)
+
+VaR backtest at alpha = 5.0%  (4999 out-of-sample days)
+  breaches: 244 observed vs 250.0 expected   (rate 4.88%)
+  Kupiec POF          stat=  0.1502  p=0.6983   ok
+  Independence        stat=  0.3850  p=0.5350   ok
+  Conditional cover.  stat=  0.5352  p=0.7652   ok
+  ES on breach days: realized -2.2387% vs predicted -2.2533% (ratio 0.99; >1 means ES is too optimistic)
+
+
+==============================================================================
+5. current forecast
+==============================================================================
+as of 2024-10-31
+  conditional volatility now : 10.58%
+  1-day ahead                : 10.44%
+  22-day average             : 11.78%
+  long-run level             : 14.18%  (half-life 17 days)
+  VaR(1%) tomorrow      : -1.75%   ES: -2.16%
+  VaR(5%) tomorrow      : -1.11%   ES: -1.51%
