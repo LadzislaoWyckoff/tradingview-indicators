@@ -28,8 +28,18 @@ python/
 ```bash
 cd python
 pip install -r requirements.txt      # numpy, scipy, pandas
-# optional, only for downloading prices:
-pip install yfinance
+pip install -e .                     # optional, makes `garchlab` importable anywhere
+pip install yfinance                 # optional, only for downloading prices
+```
+
+To use Financial Modeling Prep as a price source, put the key in the
+environment:
+
+```powershell
+$env:FMP_API_KEY = "..."             # PowerShell
+```
+```bash
+export FMP_API_KEY=...               # bash
 ```
 
 ## Quick start
@@ -48,7 +58,15 @@ let the tool download:
 
 ```bash
 python -m garchlab fit --symbol ^GSPC --start 1990-01-01
+python -m garchlab fit --symbol ^GSPC --source fmp --start 1990-01-01
 ```
+
+Sources are `yfinance` (free, unmetered, tried first), `fmp` (needs
+`FMP_API_KEY`), and `stooq` — which as of 2026 sits behind a JavaScript
+proof-of-work challenge and returns HTML instead of CSV, so treat it as dead.
+On daily `^GSPC` yfinance and FMP return the same series: closes agree to 0.01
+index points across 9,241 bars. FMP buys redundancy and, more usefully,
+intraday history.
 
 ## What the models are
 
@@ -176,9 +194,28 @@ series leaves every earlier forecast bit-identical.
 
 **The realized-variance yardstick.** The default proxy is the squared return,
 which is unbiased but so noisy that good forecasts score badly. If you have
-OHLC data, pass `--proxy garman_klass` — roughly seven times more efficient,
-and the same forecast will suddenly look much better because the ruler stopped
-shaking.
+OHLC data with a *real* open, pass `--proxy garman_klass` — roughly seven times
+more efficient, and the same forecast will suddenly look much better because
+the ruler stopped shaking.
+
+**The open is often fake, and nothing warns you.** On `^GSPC` the open is
+synthesised from the previous close over most of the older history. Measured as
+the share of days where `open == previous close`:
+
+| period | 1990–1999 | 2000–2005 | 2006–2009 | 2010–2019 | 2020–2026 |
+|---|---|---|---|---|---|
+| share | 76.6% | 96.2% | 15.1% | 6.2% | 0.1% |
+
+Every proxy that reads the open — Garman-Klass, Rogers-Satchell, Yang-Zhang —
+is therefore meaningless before roughly 2006. This is a property of the index's
+recorded history, not of a vendor: yfinance and FMP report those same figures
+decade for decade, so switching providers does not fix it. On a long history
+use `--proxy squared`; restrict the range proxies to recent data.
+
+Separately, the range proxies measure *intraday* variance only — the index does
+not trade overnight — so on real SPX they read about 13.7–14.6% annualized
+against 18.0% close-to-close. That gap is real, not an error, but it means a
+range proxy and a close-to-close forecast are not measuring the same quantity.
 
 **Optimization.** GARCH likelihoods with a fat-tailed, skewed innovation have a
 degenerate corner where the shape parameter collapses toward `nu = 2`, the

@@ -154,3 +154,82 @@ def test_module_entry_point_exposes_help():
     )
     assert proc.returncode == 0
     assert "backtest" in proc.stdout
+
+
+# --- FMP source ------------------------------------------------------------
+def test_fmp_refuses_to_run_without_a_key(monkeypatch):
+    from garchlab import data as data_mod
+
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
+        data_mod._download_fmp("^GSPC")
+
+
+def _fake_page(n, last_day):
+    """n descending daily bars ending on `last_day`, in FMP's response shape."""
+    days = pd.bdate_range(end=last_day, periods=n)[::-1]
+    return [{"symbol": "^GSPC", "date": d.strftime("%Y-%m-%d"),
+             "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5,
+             "volume": 1_000_000, "change": 0.5, "changePercent": 0.5}
+            for d in days]
+
+
+def test_fmp_pages_backwards_and_stops_on_a_short_page(monkeypatch):
+    """A full page means the window was truncated, so keep walking back."""
+    from garchlab import data as data_mod
+
+    monkeypatch.setenv("FMP_API_KEY", "test-key")
+    monkeypatch.setattr(data_mod, "_FMP_MAX_ROWS", 10)
+    calls = []
+
+    def fake(symbol, start, end, key, timeout):
+        calls.append((start, end))
+        return _fake_page(10, end) if len(calls) == 1 else _fake_page(4, end)
+
+    monkeypatch.setattr(data_mod, "_fmp_page", fake)
+    frame = data_mod._download_fmp("^GSPC", start="1990-01-01", end="2026-09-11")
+    assert len(calls) == 2
+    assert calls[1][1] < calls[0][1]                 # second window is older
+    assert len(frame) == 14                          # both pages kept
+    assert frame.index.is_monotonic_increasing
+    assert list(frame.columns) == ["open", "high", "low", "close", "volume"]
+
+
+def test_fmp_drops_bars_that_two_pages_both_returned(monkeypatch):
+    from garchlab import data as data_mod
+
+    monkeypatch.setenv("FMP_API_KEY", "test-key")
+    monkeypatch.setattr(data_mod, "_FMP_MAX_ROWS", 5)
+    pages = iter([_fake_page(5, pd.Timestamp("2026-09-11")),
+                  _fake_page(3, pd.Timestamp("2026-09-11"))])
+    monkeypatch.setattr(data_mod, "_fmp_page",
+                        lambda *a, **k: next(pages, []))
+    frame = data_mod._download_fmp("^GSPC", start="1990-01-01")
+    assert frame.index.duplicated().sum() == 0
+    assert len(frame) == 5
+
+
+def test_fmp_surfaces_the_rate_limit_message(monkeypatch):
+    from garchlab import data as data_mod
+
+    monkeypatch.setenv("FMP_API_KEY", "test-key")
+
+    def boom(*a, **k):
+        raise RuntimeError("FMP error: Limit Reach . Please upgrade your plan")
+
+    monkeypatch.setattr(data_mod, "_fmp_page", boom)
+    with pytest.raises(RuntimeError, match="Limit Reach"):
+        data_mod._download_fmp("^GSPC")
+
+
+def test_auto_source_prefers_yfinance_over_the_metered_key(monkeypatch):
+    """The FMP key is usually shared with other tooling, so it is not first."""
+    from garchlab import data as data_mod
+
+    order = []
+    monkeypatch.setattr(data_mod, "_download_yfinance",
+                        lambda *a, **k: order.append("yfinance") or "frame")
+    monkeypatch.setattr(data_mod, "_download_fmp",
+                        lambda *a, **k: order.append("fmp") or "frame")
+    assert data_mod.download("^GSPC", source="auto") == "frame"
+    assert order == ["yfinance"]

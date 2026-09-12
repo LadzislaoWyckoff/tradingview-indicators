@@ -31,7 +31,9 @@ DISTS = ("normal", "t", "skewt")
 def _add_data_args(sub: argparse.ArgumentParser) -> None:
     sub.add_argument("--csv", help="local OHLC csv; skips the network entirely")
     sub.add_argument("--symbol", default="^GSPC", help="ticker when downloading")
-    sub.add_argument("--source", default="auto", choices=("auto", "yfinance", "stooq"))
+    sub.add_argument("--source", default="auto",
+                     choices=("auto", "fmp", "yfinance", "stooq"),
+                     help="fmp needs FMP_API_KEY in the environment")
     sub.add_argument("--start", help="first date, YYYY-MM-DD")
     sub.add_argument("--end", help="last date, YYYY-MM-DD")
     sub.add_argument("--periods-per-year", type=float, default=252.0)

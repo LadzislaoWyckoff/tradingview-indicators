@@ -1,11 +1,31 @@
 """Price loading.
 
-Three sources, tried in this order when you do not name one:
+Four sources, tried in this order when you do not name one:
 
 ``csv``       a local file -- always works, and the only thing that works
               behind a locked-down network.
-``yfinance``  needs the optional ``yfinance`` package.
-``stooq``     a plain CSV endpoint, no key, no extra dependency.
+``yfinance``  needs the optional ``yfinance`` package; free and unmetered, so
+              it leads the automatic order.
+``fmp``       Financial Modeling Prep; needs ``FMP_API_KEY`` in the
+              environment.  The same daily bars as Yahoo (see below), so use it
+              as a second opinion or when Yahoo is unavailable.
+``stooq``     a plain CSV endpoint, no key -- but as of 2026 it sits behind a
+              JavaScript proof-of-work challenge and returns HTML rather than
+              CSV, so treat it as a long shot rather than a fallback.
+
+A word on the open, because it silently decides whether half this library
+works.  For ^GSPC the open is *synthesised from the previous close* over most
+of the older history: measured as the share of days where ``open == previous
+close``, it runs 76.6% in the 1990s, 96.2% in 2000-2005, 15.1% in 2006-2009,
+6.2% in the 2010s and 0.1% from 2020.  Every proxy that reads the open
+(Garman-Klass, Rogers-Satchell, Yang-Zhang) is therefore meaningless before
+about 2006, and nothing warns you -- use ``proxy="squared"`` on long
+histories, or restrict the range proxies to recent data.
+
+This is a property of the index's recorded history, not of a vendor: FMP and
+Yahoo return those same percentages decade for decade, and their closes agree
+to within 0.01 index points across 9,241 bars.  Do not switch vendors hoping
+to fix it.
 
 Everything returns the same shape: a DataFrame indexed by date with whatever
 of ``open/high/low/close/volume`` the source provides, sorted ascending and
@@ -15,6 +35,9 @@ free of duplicate dates.
 from __future__ import annotations
 
 import io
+import json
+import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -26,9 +49,15 @@ __all__ = ["load_csv", "download", "load_prices", "to_returns", "SP500_SYMBOLS"]
 
 #: The index itself, under the tickers each source expects.
 SP500_SYMBOLS = {
+    "fmp": {"index": "^GSPC", "etf": "SPY", "vix": "^VIX"},
     "yfinance": {"index": "^GSPC", "etf": "SPY", "vix": "^VIX"},
     "stooq": {"index": "^spx", "etf": "spy.us", "vix": "^vix"},
 }
+
+_FMP_BASE = "https://financialmodelingprep.com/stable"
+#: the endpoint truncates any window to this many bars, so long histories page
+_FMP_MAX_ROWS = 5000
+_FMP_MAX_PAGES = 12
 
 _OHLC = ("open", "high", "low", "close", "volume")
 
@@ -85,6 +114,77 @@ def _download_stooq(symbol: str, timeout: float = 30.0) -> pd.DataFrame:
     return _normalize(pd.read_csv(io.StringIO(payload)))
 
 
+def _fmp_page(symbol: str, start, end, key: str, timeout: float) -> list:
+    """One FMP end-of-day window.  Returns [] when the window holds nothing."""
+    query = urllib.parse.urlencode({
+        "symbol": symbol,
+        "from": start.strftime("%Y-%m-%d"),
+        "to": end.strftime("%Y-%m-%d"),
+        "apikey": key,
+    })
+    url = f"{_FMP_BASE}/historical-price-eod/full?{query}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        hint = " (rate limited)" if exc.code == 429 else ""
+        raise RuntimeError(f"FMP returned HTTP {exc.code}{hint}") from exc
+    if isinstance(payload, dict):
+        # FMP answers 200 with {"Error Message": "Limit Reach ..."} on a used-up key
+        message = payload.get("Error Message") or payload.get("error") or payload
+        raise RuntimeError(f"FMP error: {str(message)[:200]}")
+    return payload if isinstance(payload, list) else []
+
+
+def _download_fmp(symbol: str, start=None, end=None, timeout: float = 60.0) -> pd.DataFrame:
+    """Daily OHLCV from Financial Modeling Prep.
+
+    Reads the key from the ``FMP_API_KEY`` environment variable.  Pages
+    backwards because a single request is capped at 5,000 bars, which is about
+    twenty years of dailies.
+
+    On daily ^GSPC this returns the same series as yfinance -- closes match to
+    0.01 index points and the synthetic-open share is identical decade by
+    decade -- so it buys redundancy rather than better data.  Its real edge is
+    intraday history, which Yahoo will not give you in bulk and which is what
+    you would need to move past daily GARCH to a realized-volatility model.
+
+    Prices are **not** dividend-adjusted.  That is exactly right for an index
+    such as ^GSPC, whose level contains no dividends or splits to adjust away.
+    It is wrong for an ETF: SPY's quarterly dividend shows up as a fabricated
+    gap down, and because those fakes are always negative they land squarely on
+    the leverage term of a GJR or EGARCH fit.  For ETFs use the index instead,
+    or yfinance, which adjusts.
+    """
+    key = os.environ.get("FMP_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError(
+            "FMP_API_KEY is not set; export it or pass --source yfinance"
+        )
+    floor = pd.Timestamp(start) if start is not None else pd.Timestamp("1900-01-01")
+    cursor = pd.Timestamp(end) if end is not None else pd.Timestamp.today().normalize()
+
+    pages = []
+    for _ in range(_FMP_MAX_PAGES):
+        rows = _fmp_page(symbol, floor, cursor, key, timeout)
+        if not rows:
+            break
+        page = pd.DataFrame(rows)
+        if "date" not in page.columns:
+            raise RuntimeError(f"FMP returned no date column for {symbol!r}")
+        page["date"] = pd.to_datetime(page["date"])
+        pages.append(page)
+        oldest = page["date"].min()
+        # a short page means the window was covered in full, so we are done
+        if len(rows) < _FMP_MAX_ROWS or oldest <= floor:
+            break
+        cursor = oldest - pd.Timedelta(days=1)
+    if not pages:
+        raise RuntimeError(f"FMP returned no rows for {symbol!r}")
+    merged = pd.concat(pages, ignore_index=True).drop_duplicates(subset="date")
+    return _normalize(merged)
+
+
 def _download_yfinance(symbol: str, start=None, end=None) -> pd.DataFrame:
     try:
         import yfinance
@@ -103,14 +203,19 @@ def _download_yfinance(symbol: str, start=None, end=None) -> pd.DataFrame:
 def download(symbol: str = "^GSPC", source: str = "auto", start=None, end=None) -> pd.DataFrame:
     """Fetch daily OHLC for ``symbol``.
 
-    ``source="auto"`` tries yfinance first and falls back to stooq.  Both are
-    network calls; behind a restrictive proxy neither will work and you should
-    export a CSV once and use :func:`load_csv`.
+    ``source="auto"`` tries yfinance, then FMP, then stooq, keeping whichever
+    answers first.  yfinance leads because it is free and unmetered, while an
+    FMP key is typically shared with other tooling and rate limited -- ask for
+    ``source="fmp"`` explicitly when you want it.  All three are network calls;
+    behind a restrictive proxy none will work and you should export a CSV once
+    and use :func:`load_csv`.
     """
     errors = []
-    order = {"auto": ("yfinance", "stooq")}.get(source, (source,))
+    order = {"auto": ("yfinance", "fmp", "stooq")}.get(source, (source,))
     for src in order:
         try:
+            if src == "fmp":
+                return _download_fmp(symbol, start, end)
             if src == "yfinance":
                 return _download_yfinance(symbol, start, end)
             if src == "stooq":
