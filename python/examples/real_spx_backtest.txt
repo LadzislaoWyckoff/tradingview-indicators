@@ -1,0 +1,20 @@
+loaded 9,240 returns  1990-01-03 -> 2026-09-11  (sample annualized vol 17.99%)
+
+Walk-forward backtest: gjr(1,1)-skewt  horizon=1d
+  7240 out-of-sample forecasts, train=2000, refit every 63 days (115 refits, 0 failed)
+  realized-variance proxy: squared
+
+model                        QLIKE           MSE    MAE(vol)    MZ R2  MZ beta
+------------------------------------------------------------------------------
+gjr                       1.509365     1.954e-07    0.006015    0.254    0.915
+ewma(0.94)                1.579583     2.113e-07    0.006177    0.193    0.898
+rolling_std(60)           1.660278     2.416e-07    0.006476    0.094    0.686
+unconditional             2.057556     2.626e-07    0.007190    0.000   -0.449
+------------------------------------------------------------------------------
+lower QLIKE / MSE is better; MZ beta of 1.0 means unbiased
+
+Diebold-Mariano vs the GARCH model (QLIKE loss):
+  vs ewma(0.94)         DM= -6.086  p=0.0000   GARCH better (significant)
+  vs rolling_std(60)    DM= -6.361  p=0.0000   GARCH better (significant)
+  vs unconditional      DM= -6.723  p=0.0000   GARCH better (significant)
+
